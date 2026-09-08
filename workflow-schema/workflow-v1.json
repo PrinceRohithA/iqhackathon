@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent.local/workflow-v1.json",
+  "title": "Android Agent Workflow v1",
+  "type": "object",
+  "required": ["version", "id", "nodes"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string" },
+    "inputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/inputParameter" }
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "timeoutMs": { "type": "integer", "default": 60000 },
+    "nodeTimeoutMs": { "type": "integer", "default": 10000 }
+  },
+  "$defs": {
+    "inputParameter": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "enum": ["string", "image", "number", "boolean"] },
+        "description": { "type": "string" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "properties": {
+        "resourceId": { "type": "string" },
+        "text": { "type": "string" },
+        "contentDescription": { "type": "string" },
+        "className": { "type": "string" },
+        "index": { "type": "integer" },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": {
+          "enum": [
+            "launch_app",
+            "find_element",
+            "tap",
+            "long_press",
+            "swipe",
+            "type_text",
+            "read_text",
+            "back",
+            "wait",
+            "condition",
+            "loop",
+            "set_variable",
+            "input_parameter",
+            "return_result",
+            "screenshot"
+          ]
+        },
+        "params": { "type": "object" },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        }
+      }
+    }
+  }
+}

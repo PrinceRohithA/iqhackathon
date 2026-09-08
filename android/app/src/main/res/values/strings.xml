@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Android Agent</string>
+    <string name="accessibility_service_label">Android Agent Automation</string>
+    <string name="accessibility_service_description">Allows the Android Agent to inspect on-screen UI and perform taps, typing, and gestures for user-defined automation tools.</string>
+</resources>
