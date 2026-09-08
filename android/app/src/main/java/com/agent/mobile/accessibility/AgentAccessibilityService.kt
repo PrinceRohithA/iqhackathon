@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -23,6 +24,8 @@ import android.widget.TextView
 import android.widget.Toast
 import com.agent.mobile.AgentApplication
 import com.agent.mobile.automation.ElementPicker
+import com.agent.mobile.automation.IndicateOverlayMode
+import com.agent.mobile.automation.IndicateOverlayPolicy
 import com.agent.mobile.automation.NodeHitTester
 import java.util.concurrent.atomic.AtomicReference
 
@@ -40,14 +43,7 @@ class AgentAccessibilityService : AccessibilityService() {
     private val tick = object : Runnable {
         override fun run() {
             if (!picking) return
-            val left = secondsLeft()
-            if (left > 0) {
-                if (capturing) showPausedOverlay()
-                refreshChip(paused = true, seconds = left)
-            } else {
-                if (!capturing) showCaptureOverlay()
-                refreshChip(paused = false, seconds = 0)
-            }
+            ensureOverlay()
             handler.postDelayed(this, 250)
         }
     }
@@ -72,7 +68,7 @@ class AgentAccessibilityService : AccessibilityService() {
             event.eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) return
         if (picking) {
-            if (secondsLeft() == 0 && !capturing) showCaptureOverlay()
+            ensureOverlay()
             return
         }
         syncCopilotBubble()
@@ -87,10 +83,10 @@ class AgentAccessibilityService : AccessibilityService() {
             hideOverlay()
             runCatching { AgentApplication.instance.container.copilotSession.hideCompletely() }
             pauseForInternal(PAUSE_MS)
-            showPausedOverlay()
-            Log.i(TAG, "indicate started overlay=${overlay != null}")
-            Toast.makeText(this, "Open the target app, then tap the field", Toast.LENGTH_LONG).show()
-            performGlobalAction(GLOBAL_ACTION_HOME)
+            ensureOverlay()
+            Log.i(TAG, "indicate started overlay=${overlay != null} attached=${isOverlayAttached()}")
+            if (overlay == null) return@execute
+            Toast.makeText(this, "Switch to the target app, then tap the field", Toast.LENGTH_LONG).show()
             handler.removeCallbacks(tick)
             handler.post(tick)
         }
@@ -100,7 +96,7 @@ class AgentAccessibilityService : AccessibilityService() {
         mainExecutor.execute {
             if (!picking) return@execute
             pauseForInternal(durationMs)
-            showPausedOverlay()
+            ensureOverlay()
             refreshChip(paused = true, seconds = (durationMs / 1000).toInt())
         }
     }
@@ -113,7 +109,7 @@ class AgentAccessibilityService : AccessibilityService() {
     fun restoreIndicateOverlays() {
         mainExecutor.execute {
             if (!picking) return@execute
-            overlay?.visibility = View.VISIBLE
+            ensureOverlay()
         }
     }
 
@@ -143,33 +139,56 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun isOurAppFocused(): Boolean {
+    private fun isOurAppFocused(): Boolean = runCatching {
         val focusedApp = windows.orEmpty()
             .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
             .firstOrNull { it.isFocused }
-        val pkg = focusedApp?.root?.packageName?.toString() ?: return false
-        return pkg == packageName
+        val pkg = focusedApp?.root?.packageName?.toString() ?: return@runCatching false
+        pkg == packageName
+    }.getOrDefault(false)
+
+    private fun isOverlayAttached(): Boolean = overlay?.isAttachedToWindow == true
+
+    private fun currentMode(): IndicateOverlayMode = when {
+        overlay == null -> IndicateOverlayMode.HIDDEN
+        capturing -> IndicateOverlayMode.CAPTURE
+        else -> IndicateOverlayMode.PAUSED
+    }
+
+    private fun ensureOverlay() {
+        if (!picking) {
+            hideOverlay()
+            return
+        }
+        val desired = IndicateOverlayPolicy.mode(
+            picking = true,
+            secondsLeft = secondsLeft(),
+            ourAppFocused = isOurAppFocused(),
+        )
+        val attached = isOverlayAttached()
+        if (IndicateOverlayPolicy.needsRebuild(desired, currentMode(), attached)) {
+            when (desired) {
+                IndicateOverlayMode.HIDDEN -> hideOverlay()
+                IndicateOverlayMode.PAUSED -> showPausedOverlay()
+                IndicateOverlayMode.CAPTURE -> showCaptureOverlay()
+            }
+        } else {
+            overlay?.visibility = View.VISIBLE
+            refreshChip(paused = desired == IndicateOverlayMode.PAUSED, seconds = secondsLeft())
+        }
     }
 
     private fun showPausedOverlay() {
-        if (overlay != null && !capturing) {
-            overlay?.visibility = View.VISIBLE
-            return
-        }
         hideOverlay()
         capturing = false
         addOverlay(fullScreen = false)
     }
 
     private fun showCaptureOverlay() {
-        if (capturing && overlay != null) {
-            overlay?.visibility = View.VISIBLE
-            return
-        }
         hideOverlay()
         capturing = true
         addOverlay(fullScreen = true)
-        Log.i(TAG, "capture overlay shown")
+        if (overlay != null) Log.i(TAG, "capture overlay shown")
     }
 
     private fun addOverlay(fullScreen: Boolean) {
@@ -247,7 +266,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM,
-            ).apply { bottomMargin = (16 * density).toInt() },
+            ),
         )
         val params = if (fullScreen) captureLayoutParams() else pausedLayoutParams()
         try {
@@ -268,32 +287,55 @@ class AgentAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun overlayFlags(focusable: Boolean): Int {
+        var flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        if (!focusable) {
+            flags = flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        return flags
+    }
+
     private fun pausedLayoutParams(): WindowManager.LayoutParams =
         WindowManager.LayoutParams().apply {
             type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
             format = PixelFormat.TRANSLUCENT
-            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            flags = overlayFlags(focusable = false)
             width = WindowManager.LayoutParams.MATCH_PARENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
             gravity = Gravity.BOTTOM
+            y = (48 * resources.displayMetrics.density).toInt()
+            title = OVERLAY_TITLE
+            applyCutoutMode()
         }
 
     private fun captureLayoutParams(): WindowManager.LayoutParams =
         WindowManager.LayoutParams().apply {
             type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
             format = PixelFormat.TRANSLUCENT
-            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            flags = overlayFlags(focusable = true)
             width = WindowManager.LayoutParams.MATCH_PARENT
             height = WindowManager.LayoutParams.MATCH_PARENT
             gravity = Gravity.TOP
+            title = OVERLAY_TITLE
+            applyCutoutMode()
         }
 
+    private fun WindowManager.LayoutParams.applyCutoutMode() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+    }
+
     private fun refreshChip(paused: Boolean, seconds: Int) {
-        statusLabel?.text = if (paused) "Paused ${seconds}s — open the app" else "Tap a field"
-        pauseButton?.visibility = if (paused) View.GONE else View.VISIBLE
+        statusLabel?.text = if (paused) {
+            if (seconds > 0) "Paused ${seconds}s — switch to the app" else "Switch to the target app"
+        } else {
+            "Tap a field"
+        }
+        pauseButton?.visibility = View.VISIBLE
     }
 
     private fun hideOverlay() {
@@ -321,6 +363,7 @@ class AgentAccessibilityService : AccessibilityService() {
     companion object {
         const val PAUSE_MS = 5_000L
         private const val TAG = "AgentIndicate"
+        private const val OVERLAY_TITLE = "IndicateOverlay"
         private val instanceRef = AtomicReference<AgentAccessibilityService?>(null)
         val instance: AgentAccessibilityService? get() = instanceRef.get()
         val isEnabled: Boolean get() = instance != null

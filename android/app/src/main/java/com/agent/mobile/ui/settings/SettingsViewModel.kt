@@ -6,7 +6,7 @@ import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agent.mobile.accessibility.AgentAccessibilityService
-import com.agent.mobile.agent.normalizeHostAndPort
+import com.agent.mobile.agent.parseAgentEndpoint
 import com.agent.mobile.core.AppContainer
 import com.agent.shared.model.ConnectionState
 import com.agent.shared.model.DeviceInfo
@@ -64,11 +64,11 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             _busy.value = true
             _message.value = null
             try {
-                val endpoint = normalizeHostAndPort(_host.value, _port.value.toIntOrNull() ?: 8787)
-                if (endpoint.first.isBlank()) error("Enter the PC IP, e.g. 10.109.32.248")
+                val endpoint = parseAgentEndpoint(_host.value, _port.value.toIntOrNull() ?: 8787)
+                if (endpoint.host.isBlank()) error("Enter the PC IP, e.g. 10.109.32.248")
                 if (_code.value.isBlank()) error("Enter the 6-digit pairing code shown on the PC")
-                _host.value = endpoint.first
-                _port.value = endpoint.second.toString()
+                _host.value = endpoint.host
+                _port.value = endpoint.port.toString()
                 val saved = container.settings.snapshot()
                 val device = DeviceInfo(
                     deviceId = saved.sessionId.ifBlank { UUID.randomUUID().toString() },
@@ -76,16 +76,16 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                     model = Build.MODEL,
                     sdk = Build.VERSION.SDK_INT,
                 )
-                val pairing = container.agentClient.pair(endpoint.first, endpoint.second, _code.value, device)
+                val pairing = container.agentClient.pair(endpoint.host, endpoint.port, _code.value, device)
                 container.settings.update(
-                    host = endpoint.first,
-                    port = endpoint.second,
+                    host = endpoint.host,
+                    port = endpoint.port,
                     pairingCode = _code.value,
                     token = pairing.token,
                     sessionId = pairing.sessionId,
                 )
-                container.agentClient.connect(endpoint.first, endpoint.second, pairing.token)
-                _message.value = "Connected to ${endpoint.first}:${endpoint.second}"
+                container.agentClient.connect(endpoint.host, endpoint.port, pairing.token)
+                _message.value = "Connected to ${endpoint.httpBase}"
             } catch (e: Exception) {
                 _message.value = e.message ?: "Could not connect"
             } finally {
@@ -104,8 +104,8 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _busy.value = true
             try {
-                val endpoint = normalizeHostAndPort(_host.value, _port.value.toIntOrNull() ?: 8787)
-                val health = container.agentClient.fetchHealth(endpoint.first, endpoint.second)
+                val endpoint = parseAgentEndpoint(_host.value, _port.value.toIntOrNull() ?: 8787)
+                val health = container.agentClient.fetchHealth(endpoint.host, endpoint.port)
                 _message.value = "Backend ${health.backend}. Pairing code on server: ${health.pairingCode}"
             } catch (e: Exception) {
                 _message.value = e.message ?: "Health check failed"

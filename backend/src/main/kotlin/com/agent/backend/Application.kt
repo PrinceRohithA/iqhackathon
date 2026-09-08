@@ -17,6 +17,7 @@ import com.agent.shared.model.PairingResponse
 import com.agent.shared.model.ProtocolMessage
 import com.agent.shared.model.ToolDefinition
 import com.agent.shared.model.WorkflowExecution
+import io.ktor.http.ContentDisposition
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -31,7 +32,9 @@ import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveText
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -46,6 +49,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
+import java.io.File
 
 fun main() {
     val config = AppConfig()
@@ -116,6 +120,12 @@ fun Application.module(config: AppConfig = AppConfig()) {
         }
 
         get("/pair") {
+            val apk = File(config.apkPath)
+            val apkLink = if (apk.isFile) {
+                """<p><a href="/app.apk" style="color:#5eead4">Download Android APK</a> (${apk.length() / 1024} KB)</p>"""
+            } else {
+                ""
+            }
             val addresses = config.localAddresses().joinToString("<br>") { ip ->
                 "http://$ip:${config.port} &nbsp; code <b>${config.pairingCode}</b>"
             }
@@ -127,10 +137,24 @@ fun Application.module(config: AppConfig = AppConfig()) {
                 <p style="font-size:48px;letter-spacing:8px">${config.pairingCode}</p>
                 <p>Backend port ${config.port}</p>
                 <p>$addresses</p>
+                $apkLink
                 </body></html>
                 """.trimIndent(),
                 ContentType.Text.Html,
             )
+        }
+
+        get("/app.apk") {
+            val file = File(config.apkPath)
+            if (!file.isFile) {
+                call.respond(HttpStatusCode.NotFound, ProtocolMessage.ErrorMsg("NOT_FOUND", "APK not built yet"))
+                return@get
+            }
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, "agent-debug.apk").toString(),
+            )
+            call.respondFile(file)
         }
 
         post("/session") {
