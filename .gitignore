@@ -13,8 +13,8 @@
 *.aab
 *.dex
 backend/data
+backend/.env
 .env
-!backend/.env
 *.db
 *.log
 .kotlin
