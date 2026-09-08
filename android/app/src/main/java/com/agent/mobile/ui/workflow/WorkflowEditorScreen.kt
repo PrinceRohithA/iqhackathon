@@ -95,7 +95,7 @@ fun WorkflowEditorScreen(
             }
             if (state.picking) {
                 Text(
-                    "You'll go Home. Open the target app and walk to the screen you need. Use Pause 5s on the bottom bar if you need more time, then tap the field.",
+                    "A bar stays on this screen. Switch to the target app, walk to the field, then tap it. Use Pause 5s if you need more time.",
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
