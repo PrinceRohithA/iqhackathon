@@ -1,0 +1,14 @@
+{
+  "name": "Android AI Automation Agent",
+  "install": "./.cursor/install.sh",
+  "ports": [
+    { "name": "backend", "port": 8787 }
+  ],
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk ./gradlew :backend:run --no-daemon",
+      "description": "Ktor agent backend on http://localhost:8787. Prints a 6-digit pairing code and LAN addresses on startup. Serves /health, /pair, /session, /chat and the /ws websocket."
+    }
+  ]
+}
