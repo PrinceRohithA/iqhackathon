@@ -52,6 +52,7 @@ class AgentClient(
     private var socket: WebSocket? = null
     private var host: String = ""
     private var port: Int = 8787
+    private var secure: Boolean = false
     private var token: String = ""
     private var shouldReconnect = false
 
@@ -68,9 +69,10 @@ class AgentClient(
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
     fun connect(host: String, port: Int, token: String) {
-        val endpoint = normalizeHostAndPort(host, port)
-        this.host = endpoint.first
-        this.port = endpoint.second
+        val endpoint = parseAgentEndpoint(host, port)
+        this.host = endpoint.host
+        this.port = endpoint.port
+        this.secure = endpoint.secure
         this.token = token
         shouldReconnect = true
         connecting.set(false)
@@ -98,10 +100,10 @@ class AgentClient(
     }
 
     suspend fun pair(host: String, port: Int, code: String, device: DeviceInfo): PairingResponse = withContext(Dispatchers.IO) {
-        val endpoint = normalizeHostAndPort(host, port)
-        if (endpoint.first.isBlank()) error("Enter the PC IP address")
+        val endpoint = parseAgentEndpoint(host, port)
+        if (endpoint.host.isBlank()) error("Enter the PC IP address")
         if (code.isBlank()) error("Enter the pairing code from the PC")
-        val url = "http://${endpoint.first}:${endpoint.second}/session"
+        val url = "${endpoint.httpBase}/session"
         val body = json.encodeToString(
             PairingRequest.serializer(),
             PairingRequest(code = code.trim(), device = device),
@@ -120,8 +122,8 @@ class AgentClient(
     }
 
     suspend fun fetchHealth(host: String, port: Int): HealthResponse = withContext(Dispatchers.IO) {
-        val endpoint = normalizeHostAndPort(host, port)
-        val request = Request.Builder().url("http://${endpoint.first}:${endpoint.second}/health").build()
+        val endpoint = parseAgentEndpoint(host, port)
+        val request = Request.Builder().url("${endpoint.httpBase}/health").build()
         http.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) error("Health check failed (${response.code})")
@@ -130,7 +132,7 @@ class AgentClient(
     }
 
     suspend fun postChat(sessionId: String, message: String): String = withContext(Dispatchers.IO) {
-        val url = "http://$host:$port/chat"
+        val url = "${AgentEndpoint(host, port, secure).httpBase}/chat"
         val payload = json.encodeToString(
             com.agent.shared.model.ChatRequest.serializer(),
             com.agent.shared.model.ChatRequest(sessionId, message),
@@ -156,7 +158,7 @@ class AgentClient(
         } else {
             ConnectionState.RECONNECTING
         }
-        val url = "ws://$host:$port/ws?token=$token"
+        val url = "${AgentEndpoint(host, port, secure).wsBase}/ws?token=$token"
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -216,13 +218,55 @@ class AgentClient(
         }
 }
 
-internal fun normalizeHostAndPort(host: String, port: Int): Pair<String, Int> {
-    var h = host.trim().removePrefix("http://").removePrefix("https://")
-    h = h.substringBefore("/").substringBefore("?").trim()
-    val colon = h.indexOf(':')
-    if (colon > 0 && h.indexOf(':') == h.lastIndexOf(':')) {
-        val parsed = h.substring(colon + 1).toIntOrNull()
-        if (parsed != null) return h.substring(0, colon) to parsed
-    }
-    return h to port
+data class AgentEndpoint(
+    val host: String,
+    val port: Int,
+    val secure: Boolean,
+) {
+    val httpBase: String get() = url(if (secure) "https" else "http", if (secure) 443 else 80)
+    val wsBase: String get() = url(if (secure) "wss" else "ws", if (secure) 443 else 80)
+
+    private fun url(scheme: String, defaultPort: Int): String =
+        if (port == defaultPort) "$scheme://$host" else "$scheme://$host:$port"
 }
+
+internal fun normalizeHostAndPort(host: String, port: Int): Pair<String, Int> {
+    val endpoint = parseAgentEndpoint(host, port)
+    return endpoint.host to endpoint.port
+}
+
+internal fun parseAgentEndpoint(host: String, port: Int): AgentEndpoint {
+    var raw = host.trim()
+    var secure: Boolean? = null
+    when {
+        raw.startsWith("https://", ignoreCase = true) || raw.startsWith("wss://", ignoreCase = true) -> {
+            secure = true
+            raw = raw.substringAfter("://")
+        }
+        raw.startsWith("http://", ignoreCase = true) || raw.startsWith("ws://", ignoreCase = true) -> {
+            secure = false
+            raw = raw.substringAfter("://")
+        }
+    }
+    raw = raw.substringBefore("/").substringBefore("?").trim()
+    var parsedHost = raw
+    var parsedPort = port
+    val colon = raw.indexOf(':')
+    if (colon > 0 && raw.indexOf(':') == raw.lastIndexOf(':')) {
+        raw.substring(colon + 1).toIntOrNull()?.let {
+            parsedHost = raw.substring(0, colon)
+            parsedPort = it
+        }
+    }
+    val publicHttps = PUBLIC_HTTPS_SUFFIXES.any { parsedHost.endsWith(it, ignoreCase = true) }
+    val useHttps = secure ?: (parsedPort == 443 || publicHttps)
+    val usePort = if (useHttps && publicHttps && parsedPort == 8787) 443 else parsedPort
+    return AgentEndpoint(parsedHost, usePort, useHttps)
+}
+
+private val PUBLIC_HTTPS_SUFFIXES = listOf(
+    "trycloudflare.com",
+    "ngrok-free.app",
+    "ngrok.io",
+    "loca.lt",
+)

@@ -15,6 +15,7 @@ data class AppConfig(
     val geminiBaseUrl: String = env("GEMINI_URL") ?: "https://generativelanguage.googleapis.com/v1beta/openai",
     val geminiModel: String = env("GEMINI_MODEL") ?: "gemini-3.1-flash-lite",
     val dbPath: String = env("AGENT_DB") ?: "backend/data/agent.db",
+    val apkPath: String = env("AGENT_APK_PATH") ?: "android/app/build/outputs/apk/debug/app-debug.apk",
 ) {
     val pairingCode: String = (100000..999999).random().toString()
 
